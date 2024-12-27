@@ -1,0 +1,101 @@
+// server.js
+const express = require("express");
+const mongoose = require("mongoose");
+const dotenv = require("dotenv");
+const bodyParser = require("body-parser");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+
+dotenv.config();
+
+const app = express();
+app.use(bodyParser.json());
+
+// Database Connection
+mongoose
+  .connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+  .then(() => console.log("Connected to MongoDB"))
+  .catch((err) => console.error(err));
+
+// User Schema and Model
+const userSchema = new mongoose.Schema({
+  username: { type: String, required: true, unique: true },
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+});
+
+const User = mongoose.model("User", userSchema);
+
+// Middleware for Authentication
+const authenticate = (req, res, next) => {
+  const token = req.headers["authorization"];
+  if (!token) return res.status(403).send("Access denied.");
+
+  try {
+    const verified = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = verified;
+    next();
+  } catch (err) {
+    res.status(400).send("Invalid token.");
+  }
+};
+
+// Routes
+// 1. Register
+app.post("/register", async (req, res) => {
+  const { username, email, password } = req.body;
+
+  // Check if user exists
+  const existingUser = await User.findOne({ email });
+  if (existingUser) return res.status(400).send("User already exists.");
+
+  // Hash password
+  const salt = await bcrypt.genSalt(10);
+  const hashedPassword = await bcrypt.hash(password, salt);
+
+  // Create user
+  const user = new User({ username, email, password: hashedPassword });
+  try {
+    const savedUser = await user.save();
+    res.status(201).send({ userId: savedUser._id });
+  } catch (err) {
+    res.status(500).send("Error registering user.");
+  }
+});
+
+// 2. Login
+app.post("/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  // Check if user exists
+  const user = await User.findOne({ email });
+  if (!user) return res.status(404).send("User not found.");
+
+  // Check password
+  const validPassword = await bcrypt.compare(password, user.password);
+  if (!validPassword) return res.status(401).send("Invalid credentials.");
+
+  // Generate token
+  const token = jwt.sign({ _id: user._id }, process.env.JWT_SECRET, { expiresIn: "1h" });
+  res.send({ token });
+});
+
+// 3. Get User Info (Protected Route)
+app.get("/user", authenticate, async (req, res) => {
+  const user = await User.findById(req.user._id).select("-password");
+  if (!user) return res.status(404).send("User not found.");
+  res.send(user);
+});
+
+// 4. Dummy Route for Songs
+app.get("/songs", authenticate, (req, res) => {
+  res.send([
+    { id: 1, title: "Song 1", artist: "Artist A" },
+    { id: 2, title: "Song 2", artist: "Artist B" },
+    { id: 3, title: "Song 3", artist: "Artist C" },
+  ]);
+});
+
+// Start Server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
